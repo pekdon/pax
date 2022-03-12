@@ -975,6 +975,11 @@ ustar_rd(ARCHD *arcn, char *buf)
 			    hd->typeflag == LONGLINKTYPE ? "Link" : "File");
 		}
 		break;
+	case PAXEXTGTYPE:
+	case PAXEXTHTYPE:
+		arcn->type = hd->typeflag == PAXEXTGTYPE ? PAX_GHDR : PAX_XHDR;
+		arcn->pad = TAR_PAD(arcn->sb.st_size);
+		break;
 	case CONTTYPE:
 	case AREGTYPE:
 	case REGTYPE:
@@ -1432,4 +1437,214 @@ tar_gnutar_X_compat(path)
 			return (-1);
 	}
 	return (0);
+}
+
+/*
+ * ustar_read_pax_field()
+ *
+ * variant of strtok used to parse pax header data.
+ */
+static int ustar_read_pax_field(char *buf, char chr, char **next)
+{
+	char *p;
+
+	p = strchr(buf, chr);
+	if (p) {
+		*p = '\0';
+		*next = p + 1;
+		return 1;
+	}
+	return 0;
+}
+
+/*
+ * ustar_parse_pax_hdr()
+ *
+ * read key and value from single PAX header and update head_begin to point
+ * to the beginning of next header.
+ */
+static int ustar_parse_pax_hdr(char **head_begin, char **name, char **value)
+{
+	return (ustar_read_pax_field(*head_begin, ' ', name)
+		&& ustar_read_pax_field(*name, '=', value)
+		&& ustar_read_pax_field(*value, '\n', head_begin));
+}
+
+/*
+ * ustar_parse_filetime()
+ *
+ * parse filetime (atime, mtime) into seconds and nanoseconds.
+ *
+ */
+static int ustar_parse_filetime(const char *val, time_t *sec, long *nsec)
+{
+	char *ep, *p;
+
+	*sec = strtoul(val, &ep, 10);
+	if (*ep == '.') {
+		int div = 1;
+		for (p = ep + 1; *p == '0'; p++) {
+			div *= 10;
+		}
+		*nsec = strtoul(p, &ep, 10);
+		*nsec *= 100000000 / div;
+	} else {
+		*nsec = 0;
+	}
+	return *ep == '\0';
+}
+
+/*
+ * ustar_process_pax_hdr()
+ *
+ * process parsed PAX header storing known information to be applied on the
+ * next file.
+ */
+static void ustar_process_pax_hdr(USTAR_PAX *ustar_pax,
+				  const char *name, const char *value)
+{
+	char *ep;
+
+	if (strcmp(name, "atime") == 0) {
+		/* access time. */
+		if (ustar_parse_filetime(value, &ustar_pax->atime, &ustar_pax->atimensec)) {
+			ustar_pax->fields |= USTAR_PAX_ATIME;
+		}
+	} else if (strcmp(name, "charset") == 0) {
+		/* data charset (ISO-646, ISO8859-1/ISO8859-15, ISO-10646,
+		 * UTF-8 or binary) */
+	} else if (strcmp(name, "comment") == 0) {
+		/* comment */
+	} else if (strcmp(name, "gid") == 0) {
+		/* group id */
+		ustar_pax->gid = strtoul(value, &ep, 10);
+		if (*ep == '\0') {
+			ustar_pax->fields |= USTAR_PAX_GID;
+		}
+	} else if (strcmp(name, "gname") == 0) {
+		/* group name */
+		if (! gid_from_group(value, &ustar_pax->gid)) {
+			ustar_pax->fields |= USTAR_PAX_GID;
+		}
+	} else if (strcmp(name, "hdrcharset") == 0) {
+		/* header charset, UTF-8 or binary */
+	} else if (strcmp(name, "linkpath") == 0) {
+		/* override linkname field */
+		strncpy(ustar_pax->linkpath, value, sizeof(ustar_pax->linkpath));
+		ustar_pax->fields |= USTAR_PAX_LINKPATH;
+	} else if (strcmp(name, "mtime") == 0) {
+		/* modification time */
+		if (ustar_parse_filetime(value, &ustar_pax->mtime, &ustar_pax->mtimensec)) {
+			ustar_pax->fields |= USTAR_PAX_MTIME;
+		}
+	} else if (strncmp(name, "realtime.", 9) == 0) {
+		/* reserved unused prefix */
+	} else if (strncmp(name, "security.", 9) == 0) {
+		/* reserved unused prefix */
+	} else if (strcmp(name, "size") == 0) {
+		/* override size field */
+		ustar_pax->size = strtoul(value, &ep, 10);
+		if (*ep == '\0') {
+			ustar_pax->fields |= USTAR_PAX_SIZE;
+		}
+	} else if (strcmp(name, "path") == 0) {
+		/* override name field */
+		strncpy(ustar_pax->path, value, sizeof(ustar_pax->path));
+		ustar_pax->fields |= USTAR_PAX_PATH;
+	} else if (strcmp(name, "uid") == 0) {
+		/* override uid field */
+		ustar_pax->uid = strtoul(value, &ep, 10);
+		if (*ep == '\0') {
+			ustar_pax->fields |= USTAR_PAX_UID;
+		}
+	} else if (strcmp(name, "uname") == 0) {
+		/* user name */
+		if (! uid_from_user(value, &ustar_pax->uid)) {
+			ustar_pax->fields |= USTAR_PAX_UID;
+		}
+	} else {
+		/* unknown PAX header */
+	}
+}
+
+/*
+ * ustar_read_pax_hdr()
+ *
+ * read PAX extended headers from archive that will apply to the upcoming
+ * file.
+ *
+ * format for each line in the header:
+ *
+ * "%d %s=%s\n", <length>, <keyword>, <value>
+ *
+ * multiple headers can exist in the same header data.
+ */
+int ustar_read_pax_hdr(ARCHD *arcn, USTAR_PAX *ustar_pax)
+{
+	int err;
+	char *buf, *name, *value, *head_begin;
+
+	buf = malloc(arcn->sb.st_size + 1);
+	buf[arcn->sb.st_size] = '\0';
+
+	err = rd_wrbuf(buf, arcn->sb.st_size);
+	if (err > 0) {
+		head_begin = buf;
+		while (ustar_parse_pax_hdr(&head_begin, &name, &value)) {
+			ustar_process_pax_hdr(ustar_pax, name, value);
+		}
+		(void)rd_skip(arcn->pad);
+	}
+	free(buf);
+
+	return err < 1;
+}
+
+/**
+ * ustar_apply_pax_hdr()
+ *
+ * update arcn with the values set from pax.
+ */
+void ustar_apply_pax_hdr(ARCHD *arcn, USTAR_PAX *pax)
+{
+	if (pax->fields & USTAR_PAX_ATIME) {
+		arcn->sb.st_atime = pax->atime;
+		// FIXME: atimensec
+	}
+	if (pax->fields & USTAR_PAX_GID) {
+		arcn->sb.st_gid = pax->gid;
+	}
+	if (pax->fields & USTAR_PAX_LINKPATH) {
+		strncpy(arcn->ln_name, pax->linkpath, sizeof(arcn->ln_name));
+		arcn->ln_nlen = strlen(arcn->ln_name);
+	}
+	if (pax->fields & USTAR_PAX_MTIME) {
+		arcn->sb.st_mtime = pax->mtime;
+		// FIXME: mtimensec
+	}
+	if (pax->fields & USTAR_PAX_PATH) {
+		strncpy(arcn->name, pax->path, sizeof(arcn->name));
+		arcn->nlen = strlen(arcn->name);
+	}
+	if (pax->fields & USTAR_PAX_SIZE) {
+		arcn->sb.st_size = pax->size;
+	}
+	if (pax->fields & USTAR_PAX_UID) {
+		arcn->sb.st_uid = pax->uid;
+	}
+	pax->fields = 0;
+
+}
+
+/**
+ * ustar_apply_and_clear_pax()
+ *
+ * apply and clear data from the previously read PAX headers, must be called
+ * on each header read to ensure headers are applied on the correct file.
+ */
+void ustar_apply_and_clear_pax_hdr(ARCHD *arcn, USTAR_PAX *gpax, USTAR_PAX *xpax)
+{
+	ustar_apply_pax_hdr(arcn, gpax);
+	ustar_apply_pax_hdr(arcn, xpax);
+	xpax->fields = 0;
 }

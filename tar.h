@@ -67,6 +67,12 @@
 #define LONGNAMETYPE	'L'		/* Long File */
 
 /*
+ * pax Extended Header
+ */
+#define PAXEXTGTYPE	'g'		/* PAX global extended header. */
+#define PAXEXTHTYPE	'x'		/* PAX extended header. */
+
+/*
  * Mode field encoding of the different file types - values in octal
  */
 #define TSUID		04000		/* Set UID on execution */

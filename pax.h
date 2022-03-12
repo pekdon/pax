@@ -147,6 +147,8 @@ typedef struct {
 #define PAX_CTG		10		/* high performance file */
 #define PAX_GLL		11		/* GNU long symlink */
 #define PAX_GLF		12		/* GNU long file */
+#define PAX_GHDR	13		/* PAX global extended header */
+#define PAX_XHDR	14		/* PAX extended header */
 } ARCHD;
 
 /*
@@ -247,6 +249,31 @@ typedef struct oplist {
 	char		*value;		/* value for option variable */
 	struct oplist	*fow;		/* next option */
 } OPLIST;
+
+/*
+ * ustar pax extended header data.
+ */
+typedef struct {
+	int fields;			/* mask of set fields in USTAR_PAX */
+#define USTAR_PAX_ATIME		1
+#define USTAR_PAX_GID		2
+#define USTAR_PAX_LINKPATH	4
+#define USTAR_PAX_MTIME		8
+#define USTAR_PAX_PATH		16
+#define USTAR_PAX_SIZE		32
+#define USTAR_PAX_UID		64
+
+	time_t atime;
+	long atimensec;
+	gid_t gid;
+	char linkpath[PAXPATHLEN + 1];	/* linkname > 100 characters */
+	time_t mtime;
+	long mtimensec;
+	char path[PAXPATHLEN + 1];	/* name > 100 characters */
+	off_t size;
+	uid_t uid;
+
+} USTAR_PAX;
 
 /*
  * General Macros

@@ -233,6 +233,9 @@ list(void)
 	ARCHD *arcn;
 	int res;
 	time_t now;
+	USTAR_PAX ustar_gpax, ustar_xpax;
+	memset(&ustar_gpax, '\0', sizeof(USTAR_PAX));
+	memset(&ustar_xpax, '\0', sizeof(USTAR_PAX));
 
 	arcn = &archd;
 	/*
@@ -252,6 +255,15 @@ list(void)
 	 * step through the archive until the format says it is done
 	 */
 	while (next_head(arcn) == 0) {
+		if (arcn->type == PAX_GHDR) {
+			ustar_read_pax_hdr(arcn, &ustar_gpax);
+			continue;
+		} else if (arcn->type == PAX_XHDR) {
+			ustar_read_pax_hdr(arcn, &ustar_xpax);
+			continue;
+		}
+		ustar_apply_and_clear_pax_hdr(arcn, &ustar_gpax, &ustar_xpax);
+
 		if (arcn->type == PAX_GLL || arcn->type == PAX_GLF) {
 			/*
 			 * we need to read, to get the real filename
@@ -332,6 +344,9 @@ extract(void)
 	struct stat sb;
 	int fd;
 	time_t now;
+	USTAR_PAX ustar_gpax, ustar_xpax;
+	memset(&ustar_gpax, '\0', sizeof(USTAR_PAX));
+	memset(&ustar_xpax, '\0', sizeof(USTAR_PAX));
 
 	arcn = &archd;
 	/*
@@ -364,6 +379,15 @@ extract(void)
 	 */
 	while (next_head(arcn) == 0) {
 		int write_to_hard_link = 0;
+
+		if (arcn->type == PAX_GHDR) {
+			ustar_read_pax_hdr(arcn, &ustar_gpax);
+			continue;
+		} else if (arcn->type == PAX_XHDR) {
+			ustar_read_pax_hdr(arcn, &ustar_xpax);
+			continue;
+		}
+		ustar_apply_pax_hdr(arcn, &ustar_gpax, &ustar_xpax);
 
 		if (arcn->type == PAX_GLL || arcn->type == PAX_GLF) {
 			/*

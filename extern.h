@@ -328,6 +328,8 @@ int ustar_rd(ARCHD *, char *);
 int ustar_wr(ARCHD *);
 int tar_gnutar_X_compat(const char *);
 int tar_gnutar_minus_minus_exclude(const char *);
+int ustar_read_pax_hdr(ARCHD *, USTAR_PAX *);
+void ustar_apply_and_clear_pax_hdr(ARCHD *, USTAR_PAX *, USTAR_PAX *);
 
 /*
  * tty_subs.c
